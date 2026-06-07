@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>作文批改 · Deep Essay</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@18.0.5/lib/marked.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
+<style>
+  :root {
+    --blue: #1a73e8;
+    --blue-hover: #1765cc;
+    --text: #202124;
+    --text-secondary: #5f6368;
+    --border: #dadce0;
+    --bg: #fff;
+    --bg-soft: #f8f9fa;
+    --green: #1e8e3e;
+    --orange: #e37400;
+    --red: #d93025;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--bg-soft);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+
+  header.app { margin-bottom: 28px; }
+  header.app .title { font-size: 22px; font-weight: 500; letter-spacing: -0.2px; }
+  header.app .title b { font-weight: 600; }
+  header.app .sub { color: var(--text-secondary); margin-top: 4px; font-size: 13px; }
+
+  .card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  /* ---------- Input state ---------- */
+  .input-card { padding: 20px; }
+  textarea {
+    width: 100%;
+    min-height: 260px;
+    resize: vertical;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); }
+  .input-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 14px; flex-wrap: wrap; gap: 12px;
+  }
+  .count { color: var(--text-secondary); font-size: 13px; }
+
+  .btn {
+    background: var(--blue); color: #fff; border: none;
+    padding: 8px 22px; border-radius: 6px; font-size: 14px; font-weight: 500;
+    cursor: pointer; font-family: inherit; transition: background .15s;
+  }
+  .btn:hover { background: var(--blue-hover); }
+  .btn:disabled { background: var(--border); color: var(--text-secondary); cursor: not-allowed; }
+  .btn.ghost {
+    background: transparent; color: var(--blue); border: 1px solid var(--border);
+  }
+  .btn.ghost:hover { background: var(--bg-soft); }
+
+  .error-box {
+    margin-top: 14px; padding: 12px 14px; border-radius: 6px;
+    background: #fce8e6; color: var(--red); border: 1px solid #f5c6c2; font-size: 13px;
+  }
+
+  /* ---------- Report state ---------- */
+  .hidden { display: none !important; }
+
+  .gauges {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: center;
+    gap: 28px; padding: 28px 20px;
+  }
+  .gauge { text-align: center; }
+  .gauge svg { display: block; margin: 0 auto; transform: rotate(-90deg); }
+  .gauge .ring-track { stroke: var(--border); }
+  .gauge .ring-prog { transition: stroke-dashoffset 1s cubic-bezier(.4,0,.2,1); stroke-linecap: round; }
+  .gauge .ring-num {
+    transform: rotate(90deg); transform-origin: center;
+    font-weight: 500; fill: var(--text);
+  }
+  .gauge .label { margin-top: 8px; font-size: 13px; color: var(--text-secondary); }
+  .gauge.total .label { color: var(--text); font-weight: 500; }
+
+  .priority {
+    margin: 0 0 20px; padding: 14px 16px;
+    background: #e8f0fe; border-left: 4px solid var(--blue);
+    border-radius: 0 8px 8px 0;
+  }
+  .priority .h { font-weight: 600; color: var(--blue); font-size: 13px; margin-bottom: 4px;
+    text-transform: uppercase; letter-spacing: .4px; }
+  .priority .body { color: var(--text); }
+
+  .audits { display: flex; flex-direction: column; gap: 12px; }
+  .audit { overflow: hidden; }
+  .audit-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; cursor: pointer; user-select: none;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+  .audit-name { font-weight: 500; flex: 1; }
+  .audit-score { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .chev { color: var(--text-secondary); transition: transform .2s; flex: none; }
+  .audit.open .chev { transform: rotate(180deg); }
+  .audit-body {
+    padding: 0 18px; max-height: 0; overflow: hidden;
+    transition: max-height .3s ease, padding .3s ease;
+    border-top: 0 solid var(--border);
+  }
+  .audit.open .audit-body {
+    padding: 4px 18px 18px; max-height: 4000px; border-top: 1px solid var(--border);
+  }
+  .audit-body .just {
+    color: var(--text-secondary); font-size: 13px; font-style: italic;
+    margin: 10px 0 14px; padding-top: 10px;
+  }
+
+  /* markdown content */
+  .md { color: var(--text); }
+  .md h1,.md h2,.md h3 { font-size: 15px; font-weight: 600; margin: 14px 0 6px; }
+  .md p { margin: 8px 0; }
+  .md ul,.md ol { margin: 8px 0; padding-left: 22px; }
+  .md li { margin: 5px 0; }
+  .md code {
+    background: var(--bg-soft); padding: 1px 5px; border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+  }
+  .md blockquote {
+    margin: 10px 0; padding: 8px 14px; background: var(--bg-soft);
+    border-left: 3px solid var(--border); border-radius: 0 6px 6px 0; color: var(--text-secondary);
+  }
+  .md s { color: var(--red); }
+  .md strong { font-weight: 600; }
+
+  /* skeleton / loading */
+  .spinner {
+    width: 36px; height: 36px; border: 3px solid var(--border);
+    border-top-color: var(--blue); border-radius: 50%;
+    animation: spin .8s linear infinite; margin: 0 auto;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-card { padding: 28px 24px; }
+  .loading-card.empty { padding: 48px 20px; text-align: center; }
+  .stream-head { display: flex; align-items: center; gap: 10px; margin-bottom: 16px;
+    color: var(--text-secondary); font-size: 13px; }
+  .spinner.small { width: 18px; height: 18px; border-width: 2px; margin: 0; }
+  .stream-body { max-height: 420px; overflow-y: auto; font-size: 13.5px; }
+  .stream-body::after { content: "▋"; color: var(--blue); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .report-actions { margin-top: 24px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <div class="title"><b>作文批改</b> · Essay Grader</div>
+    <div class="sub">AI 英语作文批改 — Lighthouse 风格报告</div>
+  </header>
+
+  <!-- ===== Input state ===== -->
+  <section id="inputState">
+    <div class="card input-card">
+      <textarea id="essay" placeholder="在此粘贴你的英语作文 / 段落…"></textarea>
+      <div class="input-foot">
+        <span class="count" id="count">0 words</span>
+        <button class="btn" id="gradeBtn">批改</button>
+      </div>
+      <div id="inputError" class="error-box hidden"></div>
+    </div>
+  </section>
+
+  <!-- ===== Loading state ===== -->
+  <section id="loadingState" class="hidden">
+    <div class="card loading-card">
+      <div class="stream-head">
+        <div class="spinner small"></div>
+        <span class="t">正在批改…</span>
+      </div>
+      <div class="md stream-body" id="streamBody"></div>
+    </div>
+  </section>
+
+  <!-- ===== Report state ===== -->
+  <section id="reportState" class="hidden">
+    <div class="card" style="margin-bottom:20px;">
+      <div class="gauges" id="gauges"></div>
+    </div>
+
+    <div class="priority" id="priority">
+      <div class="h">Top Priority</div>
+      <div class="body" id="priorityBody"></div>
+    </div>
+
+    <div class="audits" id="audits"></div>
+
+    <div class="report-actions">
+      <button class="btn ghost" id="againBtn">再批改一篇</button>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const essayEl = $("essay");
+  const countEl = $("count");
+  const gradeBtn = $("gradeBtn");
+  const inputError = $("inputError");
+
+  const inputState = $("inputState");
+  const loadingState = $("loadingState");
+  const reportState = $("reportState");
+
+  // ---- color by score (1-5) ----
+  function colorFor(score) {
+    if (score >= 4) return getCSS("--green");
+    if (score >= 3) return getCSS("--orange");
+    return getCSS("--red");
+  }
+  function getCSS(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+  // ---- word count ----
+  function updateCount() {
+    const words = (essayEl.value.trim().match(/\S+/g) || []).length;
+    countEl.textContent = words + (words === 1 ? " word" : " words");
+  }
+  essayEl.addEventListener("input", updateCount);
+  updateCount();
+
+  // ---- markdown render (sanitized) ----
+  function renderMd(text) {
+    return DOMPurify.sanitize(marked.parse(text || "", { breaks: true }));
+  }
+
+  // ---- state switching ----
+  function show(state) {
+    inputState.classList.toggle("hidden", state !== "input");
+    loadingState.classList.toggle("hidden", state !== "loading");
+    reportState.classList.toggle("hidden", state !== "report");
+  }
+
+  // ---- gauge SVG builder ----
+  function makeGauge(label, score, isTotal) {
+    const r = isTotal ? 46 : 38;
+    const size = (r + 8) * 2;
+    const cx = size / 2;
+    const circ = 2 * Math.PI * r;
+    const pct = Math.max(0, Math.min(1, score / 5));
+    const color = colorFor(score);
+    const stroke = isTotal ? 9 : 7;
+    const fontSize = isTotal ? 22 : 18;
+    const display = isTotal ? score.toFixed(1) : String(score);
+
+    const wrap = document.createElement("div");
+    wrap.className = "gauge" + (isTotal ? " total" : "");
+    wrap.innerHTML =
+      '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + ' ' + size + '">' +
+        '<circle class="ring-track" cx="' + cx + '" cy="' + cx + '" r="' + r + '" fill="none" stroke-width="' + stroke + '"/>' +
+        '<circle class="ring-prog" cx="' + cx + '" cy="' + cx + '" r="' + r + '" fill="none" stroke-width="' + stroke + '" ' +
+          'stroke="' + color + '" stroke-dasharray="' + circ + '" stroke-dashoffset="' + circ + '"/>' +
+        '<text class="ring-num" x="' + cx + '" y="' + cx + '" text-anchor="middle" dominant-baseline="central" font-size="' + fontSize + '">' + display + '</text>' +
+      '</svg>' +
+      '<div class="label">' + label + '</div>';
+
+    // animate after insert
+    const prog = wrap.querySelector(".ring-prog");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        prog.style.strokeDashoffset = String(circ * (1 - pct));
+      });
+    });
+    return wrap;
+  }
+
+  // ---- audit card builder ----
+  function makeAudit(name, data) {
+    const score = data.score;
+    const color = colorFor(score);
+    const card = document.createElement("div");
+    card.className = "card audit open";
+
+    const body =
+      '<div class="md">' + renderMd(data.feedback) + "</div>" +
+      (data.justification ? '<div class="just">' + DOMPurify.sanitize(data.justification) + "</div>" : "");
+
+    card.innerHTML =
+      '<div class="audit-head">' +
+        '<span class="dot" style="background:' + color + '"></span>' +
+        '<span class="audit-name">' + name + '</span>' +
+        '<span class="audit-score">' + score + '/5</span>' +
+        '<span class="chev">▾</span>' +
+      '</div>' +
+      '<div class="audit-body">' + body + '</div>';
+
+    card.querySelector(".audit-head").addEventListener("click", () => {
+      card.classList.toggle("open");
+    });
+    return card;
+  }
+
+  // ---- split one markdown blob into 3 dimension sections by ### headings ----
+  function splitFeedback(full) {
+    const out = { Content: "", Language: "", Structure: "" };
+    if (!full) return out;
+    // match "### Content" / "## Language" etc., case-insensitive
+    const re = /^#{2,4}\s*(Content|Language|Structure)\b.*$/gim;
+    const marks = [];
+    let m;
+    while ((m = re.exec(full)) !== null) {
+      marks.push({ key: m[1], start: m.index, headEnd: m.index + m[0].length });
+    }
+    if (marks.length === 0) {
+      out.Content = full; // fallback: dump everything into first card
+      return out;
+    }
+    for (let i = 0; i < marks.length; i++) {
+      const cur = marks[i];
+      const end = i + 1 < marks.length ? marks[i + 1].start : full.length;
+      const body = full.slice(cur.headEnd, end).trim();
+      const cap = cur.key.charAt(0).toUpperCase() + cur.key.slice(1).toLowerCase();
+      out[cap] = body;
+    }
+    return out;
+  }
+
+  // ---- render full report ----
+  function renderReport(rep) {
+    const sections = splitFeedback(rep.feedbackText || "");
+    const dims = [
+      ["Content", rep.content.score, sections.Content],
+      ["Language", rep.language.score, sections.Language],
+      ["Structure", rep.structure.score, sections.Structure],
+    ];
+    const scores = dims.map((d) => Number(d[1]) || 0);
+    const total = scores.reduce((a, b) => a + b, 0) / scores.length;
+
+    // gauges
+    const gWrap = $("gauges");
+    gWrap.innerHTML = "";
+    gWrap.appendChild(makeGauge("Content", scores[0], false));
+    gWrap.appendChild(makeGauge("Language", scores[1], false));
+    gWrap.appendChild(makeGauge("Structure", scores[2], false));
+    gWrap.appendChild(makeGauge("总分", total, true));
+
+    // priority
+    $("priorityBody").textContent = rep.topPriority || "";
+    $("priority").classList.toggle("hidden", !rep.topPriority);
+
+    // audits
+    const aWrap = $("audits");
+    aWrap.innerHTML = "";
+    dims.forEach(([name, score, fb]) =>
+      aWrap.appendChild(makeAudit(name, { score, feedback: fb, justification: "" }))
+    );
+
+    show("report");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // ---- grade action (SSE streaming) ----
+  async function grade() {
+    const essay = essayEl.value.trim();
+    inputError.classList.add("hidden");
+    if (!essay) {
+      inputError.textContent = "请先粘贴作文内容。";
+      inputError.classList.remove("hidden");
+      return;
+    }
+
+    const streamBody = $("streamBody");
+    streamBody.innerHTML = "";
+    show("loading");
+
+    let feedbackBuf = "";
+    let result = null;
+
+    const applyToken = (text) => {
+      feedbackBuf += text;
+      streamBody.innerHTML = renderMd(feedbackBuf);
+      streamBody.scrollTop = streamBody.scrollHeight;
+    };
+
+    try {
+      const resp = await fetch("/grade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ essay }),
+      });
+      if (!resp.ok || !resp.body) {
+        let msg = "请求失败 (" + resp.status + ")";
+        try { const j = await resp.json(); if (j.error) msg = j.error; } catch {}
+        throw new Error(msg);
+      }
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // split into SSE frames by blank line
+        const frames = buf.split("\n\n");
+        buf = frames.pop(); // keep incomplete tail
+
+        for (const frame of frames) {
+          let event = "message", dataLine = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            else if (line.startsWith("data:")) dataLine += line.slice(5).trim();
+          }
+          if (!dataLine) continue;
+          let data;
+          try { data = JSON.parse(dataLine); } catch { continue; }
+
+          if (event === "token") {
+            applyToken(data.text || "");
+          } else if (event === "result") {
+            result = data;
+          } else if (event === "error") {
+            throw new Error(data.message || "批改出错");
+          }
+          // "done" -> loop ends naturally when stream closes
+        }
+      }
+
+      if (!result || !result.content || !result.language || !result.structure) {
+        throw new Error("未收到评分结果，请重试。");
+      }
+      // prefer server's clean feedback text; fall back to what we streamed
+      result.feedbackText = result.content.feedback || feedbackBuf;
+      renderReport(result);
+    } catch (err) {
+      show("input");
+      inputError.textContent = "批改失败：" + err.message;
+      inputError.classList.remove("hidden");
+    }
+  }
+
+  gradeBtn.addEventListener("click", grade);
+  $("againBtn").addEventListener("click", () => {
+    show("input");
+    essayEl.focus();
+  });
+})();
+</script>
+</body>
+</html>
