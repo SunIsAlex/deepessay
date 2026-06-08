@@ -1,9 +1,9 @@
 {
-  "name": "deepessay",
+  "name": "essay-grader",
   "version": "1.0.0",
   "type": "module",
   "description": "AI English essay grader with Lighthouse-style report UI on EdgeOne Pages",
   "dependencies": {
-    "openai": "^4.104.0"
+    "openai": "^4.77.0"
   }
 }

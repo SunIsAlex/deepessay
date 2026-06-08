@@ -95,10 +95,10 @@ export async function onRequest(context) {
   }
 
   const openai = new OpenAI({
-    apiKey: env.OPENAI_API_KEY,
-    baseURL: env.OPENAI_API_URL,
+    apiKey: env.GRADE_API_KEY,
+    baseURL: env.GRADE_API_URL,
   });
-  const model = env.OPENAI_MODEL || "deepseek-v4-flash";
+  const model = env.GRADE_MODEL || "deepseek-v4-flash";
 
   const stream = new TransformStream();
   const writer = stream.writable.getWriter();

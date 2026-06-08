@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>作文批改 · Deep Essay</title>
+<title>作文批改 · Essay Grader</title>
 <script src="https://cdn.jsdelivr.net/npm/marked@18.0.5/lib/marked.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
 <style>
@@ -64,6 +64,21 @@
     margin-top: 14px; flex-wrap: wrap; gap: 12px;
   }
   .count { color: var(--text-secondary); font-size: 13px; }
+  .foot-btns { display: flex; gap: 10px; align-items: center; }
+  .ocr-status {
+    margin-top: 12px; padding: 10px 14px; border-radius: 6px; font-size: 13px;
+    background: #e8f0fe; color: var(--blue);
+  }
+  .ocr-status .row { display: flex; align-items: center; gap: 10px; }
+  .ocr-status .spinner { width: 16px; height: 16px; border-width: 2px; margin: 0; }
+  .ocr-status.ok { background: #e6f4ea; color: var(--green); }
+  .ocr-bar {
+    margin-top: 8px; height: 3px; border-radius: 2px; background: #c5d9f7; overflow: hidden;
+  }
+  .ocr-bar > i {
+    display: block; height: 100%; width: 0; background: var(--blue);
+    border-radius: 2px; transition: width .4s ease;
+  }
 
   .btn {
     background: var(--blue); color: #fff; border: none;
@@ -179,11 +194,16 @@
   <!-- ===== Input state ===== -->
   <section id="inputState">
     <div class="card input-card">
-      <textarea id="essay" placeholder="在此粘贴你的英语作文 / 段落…"></textarea>
+      <textarea id="essay" placeholder="在此粘贴你的英语作文，或点击下方「📷 上传作文照片」识别…"></textarea>
+      <div id="ocrStatus" class="ocr-status hidden"></div>
       <div class="input-foot">
         <span class="count" id="count">0 words</span>
-        <button class="btn" id="gradeBtn">批改</button>
+        <div class="foot-btns">
+          <button class="btn ghost" id="uploadBtn">📷 上传作文照片</button>
+          <button class="btn" id="gradeBtn">批改</button>
+        </div>
       </div>
+      <input type="file" id="fileInput" accept="image/*" class="hidden" />
       <div id="inputError" class="error-box hidden"></div>
     </div>
   </section>
@@ -227,6 +247,9 @@
   const countEl = $("count");
   const gradeBtn = $("gradeBtn");
   const inputError = $("inputError");
+  const uploadBtn = $("uploadBtn");
+  const fileInput = $("fileInput");
+  const ocrStatus = $("ocrStatus");
 
   const inputState = $("inputState");
   const loadingState = $("loadingState");
@@ -464,6 +487,98 @@
   $("againBtn").addEventListener("click", () => {
     show("input");
     essayEl.focus();
+  });
+
+  // ---- OCR upload ----
+  uploadBtn.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", async (e) => {
+    const file = e.target.files && e.target.files[0];
+    fileInput.value = ""; // 允许重复选同一张
+    if (!file) return;
+
+    inputError.classList.add("hidden");
+
+    // 限制 5MB，过大先提示（也可在此做压缩，简化起见先拦截）
+    if (file.size > 5 * 1024 * 1024) {
+      inputError.textContent = "图片过大（超过 5MB），请压缩后再试。";
+      inputError.classList.remove("hidden");
+      return;
+    }
+
+    // 读成 base64 data URL
+    let dataUrl;
+    try {
+      dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(new Error("读取图片失败"));
+        r.readAsDataURL(file);
+      });
+    } catch (err) {
+      inputError.textContent = err.message;
+      inputError.classList.remove("hidden");
+      return;
+    }
+
+    // 进入识别中状态：分阶段文案 + 进度条
+    uploadBtn.disabled = true;
+    gradeBtn.disabled = true;
+    ocrStatus.className = "ocr-status";
+    ocrStatus.innerHTML =
+      '<div class="row"><span class="spinner"></span><span id="ocrMsg">正在上传图片…</span></div>' +
+      '<div class="ocr-bar"><i id="ocrBar"></i></div>';
+
+    const bar = $("ocrBar");
+    const msg = $("ocrMsg");
+    // 进度是“感知进度”：分阶段平滑推进到 90%，成功后再补满 100%
+    const stages = [
+      { at: 200, w: 25, text: "正在上传图片…" },
+      { at: 900, w: 55, text: "正在识别作文文字…" },
+      { at: 2500, w: 80, text: "正在整理识别结果…" },
+      { at: 4500, w: 90, text: "即将完成…" },
+    ];
+    requestAnimationFrame(() => { if (bar) bar.style.width = "8%"; });
+    const timers = stages.map((s) =>
+      setTimeout(() => { if (bar) bar.style.width = s.w + "%"; if (msg) msg.textContent = s.text; }, s.at)
+    );
+    const clearTimers = () => timers.forEach(clearTimeout);
+
+    try {
+      const resp = await fetch("/ocr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: dataUrl }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error) {
+        throw new Error(data.error || ("识别失败 (" + resp.status + ")"));
+      }
+      const text = (data.text || "").trim();
+      if (!text) throw new Error("未识别到文字，请换一张更清晰的照片。");
+
+      // 进度补满
+      clearTimers();
+      if (bar) bar.style.width = "100%";
+
+      // 填进 textarea，让用户核对/修正后再批改
+      essayEl.value = text;
+      updateCount();
+      // 让 100% 的动画显示一瞬再切成功态
+      setTimeout(() => {
+        ocrStatus.className = "ocr-status ok";
+        ocrStatus.innerHTML = '<div class="row"><span>✓ 识别完成，请核对并修正可能的错字，然后点「批改」。</span></div>';
+      }, 250);
+      essayEl.focus();
+    } catch (err) {
+      clearTimers();
+      ocrStatus.classList.add("hidden");
+      inputError.textContent = "识别失败：" + err.message;
+      inputError.classList.remove("hidden");
+    } finally {
+      uploadBtn.disabled = false;
+      gradeBtn.disabled = false;
+    }
   });
 })();
 </script>
