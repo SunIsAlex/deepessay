@@ -440,15 +440,12 @@
       essayCard.style.display = "none";
     }
 
-    // share link
-    const shareBox = $("shareBox");
+    // share link: shown immediately for shared reports (rep already has sessionId);
+    // for fresh grading, it's added later by saveReport() -> showShareLink().
     if (rep.sessionId) {
-      const link = location.origin + location.pathname + "?s=" + rep.sessionId;
-      $("shareInput").value = link;
-      shareBox.classList.remove("hidden");
-      history.replaceState(null, "", "?s=" + rep.sessionId);
+      showShareLink(rep.sessionId);
     } else {
-      shareBox.classList.add("hidden");
+      $("shareBox").classList.add("hidden");
     }
 
     show("report");
@@ -531,11 +528,46 @@
       result.feedbackText = result.content.feedback || feedbackBuf;
       result.essay = essay;
       renderReport(result);
+      // 报告已展示；再异步持久化到 KV（Edge Function），成功后补上分享链接。
+      // 失败不影响已展示的报告，只是没有可分享的 URL。
+      saveReport(result);
     } catch (err) {
       show("input");
       inputError.textContent = "批改失败：" + err.message;
       inputError.classList.remove("hidden");
     }
+  }
+
+  // 把报告写入 KV（经 /save Edge Function），成功后展示分享链接
+  async function saveReport(rep) {
+    try {
+      const resp = await fetch("/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          essay: rep.essay || "",
+          feedbackText: rep.feedbackText || "",
+          topPriority: rep.topPriority || "",
+          scores: {
+            content: rep.content.score,
+            language: rep.language.score,
+            structure: rep.structure.score,
+          },
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.error || !data.sessionId) return; // 静默失败：报告仍可用
+      showShareLink(data.sessionId);
+    } catch {
+      // 网络/KV 故障：不打扰用户，仅无分享链接
+    }
+  }
+
+  function showShareLink(sessionId) {
+    const link = location.origin + location.pathname + "?s=" + sessionId;
+    $("shareInput").value = link;
+    $("shareBox").classList.remove("hidden");
+    history.replaceState(null, "", "?s=" + sessionId);
   }
 
   gradeBtn.addEventListener("click", grade);

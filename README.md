@@ -18,20 +18,23 @@
 ```
                           ┌─────────────────────────────┐
   [拍照] ──base64──▶ /ocr │ SiliconFlow 视觉模型         │──识别文字──┐
-                          │ Qwen3.5-397B-A17B            │            │
+   (Cloud Fn)             │ Qwen3.5-397B-A17B            │            │
                           └─────────────────────────────┘            ▼
                                                             填入 textarea，用户核对修正
                                                                        │
                           ┌─────────────────────────────┐            ▼
-  [粘贴] ─────────▶ /grade│ DeepSeek                     │◀──批改──────┘
-                          │ deepseek-v4-flash (SSE 流式) │
+  [粘贴] ───────▶ /grade  │ DeepSeek                     │◀──批改──────┘
+   (Cloud Fn, SSE)        │ deepseek-v4-flash (SSE 流式) │
                           └─────────────────────────────┘
                                        │
                                        ▼
-                            Lighthouse 风格报告
+                            Lighthouse 风格报告 ──▶ /save (Edge Fn) ──▶ KV
+                                       ▲                                  │
+                                       │                                  │
+                            分享链接 ?s=<id> ◀── /report (Edge Fn) ◀──────┘
 ```
 
-两个 AI 服务来自不同供应商，配置完全隔离：OCR 走硅基流动，批改走 DeepSeek 官方。
+两个 AI 服务来自不同供应商，配置完全隔离：OCR 走硅基流动，批改走 DeepSeek 官方。报告持久化走 EdgeOne KV（仅 Edge Functions 可访问）。
 
 ## 目录结构
 
@@ -40,11 +43,17 @@ deepessay/
 ├── index.html              # 前端单页（输入态 / 流式加载态 / 报告态）
 ├── package.json            # 声明 openai 依赖 + "type":"module"
 ├── test-ocr.mjs            # OCR 本地测试脚本（独立运行，不参与部署）
-└── node-functions/         # EdgeOne Cloud Functions
-    ├── grade.js            # 批改接口（SSE 流式输出反馈 + 末尾评分 JSON）
-    ├── ocr.js              # OCR 接口（图片转文字，非流式）
-    └── getRequestBody.js   # 请求体解析 helper
+├── test-api.sh             # 接口冒烟测试（curl）
+├── node-functions/         # Cloud Functions —— 支持 SSE 流式
+│   ├── grade.js            # 批改接口（SSE 流式输出反馈 + 末尾评分 JSON）
+│   ├── ocr.js              # OCR 接口（图片转文字，非流式）
+│   └── getRequestBody.js   # 请求体解析 helper
+└── edge-functions/         # Edge Functions —— KV 仅在此可用（但不支持 SSE）
+    ├── save.js             # 批改后写报告到 KV，返回 sessionId
+    └── report.js           # 按 id 从 KV 读报告（分享链接打开时）
 ```
+
+> **为什么分两类函数**：EdgeOne KV **只能在 Edge Functions 中访问**，而 SSE 流式在 Edge Functions 上有缓冲问题（会一次性吐出）、必须用 Cloud Functions。两个约束冲突，因此按能力拆分：流式批改（grade）留在 Cloud Functions 且不碰 KV；KV 读写（save / report）放在 Edge Functions。前端在批改完成后，再单独调用 `/save` 把结果持久化。
 
 ## 环境变量
 
@@ -117,9 +126,20 @@ node test-ocr.mjs ./作文照片.jpg
 
 ## 部署注意
 
-- **Cloud Functions，不要用 Edge Functions**：SSE 流式在 Edge Functions 上有缓冲问题（输出会一次性吐出而非流式）。两个函数都放在 `node-functions/`（或你 EdgeOne 项目实际识别的 cloud-functions 目录）下。
+- **函数分两类，不能混放**：
+  - `node-functions/`（Cloud Functions）：`grade.js`、`ocr.js`。SSE 流式必须用 Cloud Functions——Edge Functions 上有缓冲问题（输出会一次性吐出而非流式）。
+  - `edge-functions/`（Edge Functions）：`save.js`、`report.js`。EdgeOne KV **只能在 Edge Functions 中访问**。
+- **绑定 KV 命名空间**：在控制台「Storage - KV」开通账户、创建命名空间，绑定到本项目时**变量名必须填 `deepessay_kv`**（代码以该全局名访问 KV，非 `env.xxx`）。绑定后 `save` / `report` 才能工作；未绑定时批改仍正常，只是没有分享链接。
+- **KV key 限制**：key 只能含字母、数字、下划线（≤512B）。本项目用 `report_<id>`，id 为 12 位 base36（纯字母数字）。
 - OpenAI SDK 依赖已在 `package.json` 声明，EdgeOne 部署时自动安装；本地需先 `npm install`。
 - 模板字符串里若包含代码 / 命令示例，反引号需转义，否则可能报 "Missing semicolon"。
+
+## 持久化与分享
+
+- 批改完成后，前端把报告（作文原文 + 反馈 + 分数 + topPriority）POST 到 `/save`，由 Edge Function 写入 KV 并返回 `sessionId`，前端据此生成分享链接 `?s=<id>` 并展示复制按钮。
+- 打开含 `?s=<id>` 的 URL 时，前端调 `/report?id=<id>` 直接拉取并渲染完整报告（含可折叠的「作文原文」卡片），跳过输入环节。
+- 持久化是 best-effort：`/save` 失败不影响已展示的报告，仅无分享链接。
+- KV 条目当前**不设过期**，报告永久留存。如需自动清理，确认 EdgeOne KV 的 `put` 是否支持 TTL 后再加。
 
 ## 后续可做
 
