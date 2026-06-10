@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <title>作文批改 · Essay Grader</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
 <script src="https://cdn.jsdelivr.net/npm/marked@18.0.5/lib/marked.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.4/dist/purify.min.js"></script>
 <style>
@@ -183,6 +183,23 @@
   @keyframes blink { 50% { opacity: 0; } }
 
   .report-actions { margin-top: 24px; text-align: center; }
+
+  .essay-pre {
+    white-space: pre-wrap; word-break: break-word; font-family: inherit;
+    font-size: 13.5px; color: var(--text); margin: 12px 0 4px; line-height: 1.8;
+  }
+  .share-box {
+    margin-top: 16px; display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; font-size: 13px;
+  }
+  .share-label { color: var(--text-secondary); flex: none; }
+  .share-input {
+    flex: 1; min-width: 0; border: none; outline: none; background: var(--bg-soft);
+    border-radius: 4px; padding: 6px 10px; font-size: 12.5px; color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .share-copy { padding: 5px 14px; font-size: 13px; flex: none; }
 </style>
 </head>
 <body>
@@ -232,6 +249,21 @@
     </div>
 
     <div class="audits" id="audits"></div>
+
+    <div class="card audit" id="essayCard" style="margin-top:12px; display:none;">
+      <div class="audit-head" id="essayHead">
+        <span class="dot" style="background:var(--text-secondary)"></span>
+        <span class="audit-name">作文原文</span>
+        <span class="chev">▾</span>
+      </div>
+      <div class="audit-body"><pre class="essay-pre" id="essayPre"></pre></div>
+    </div>
+
+    <div class="share-box hidden" id="shareBox">
+      <span class="share-label">报告链接：</span>
+      <input class="share-input" id="shareInput" readonly />
+      <button class="btn ghost share-copy" id="shareCopy">复制</button>
+    </div>
 
     <div class="report-actions">
       <button class="btn ghost" id="againBtn">再批改一篇</button>
@@ -398,6 +430,27 @@
       aWrap.appendChild(makeAudit(name, { score, feedback: fb, justification: "" }))
     );
 
+    // essay original text (shown when available, e.g. shared reports)
+    const essayCard = $("essayCard");
+    if (rep.essay) {
+      $("essayPre").textContent = rep.essay;
+      essayCard.style.display = "";
+      essayCard.classList.remove("open"); // collapsed by default
+    } else {
+      essayCard.style.display = "none";
+    }
+
+    // share link
+    const shareBox = $("shareBox");
+    if (rep.sessionId) {
+      const link = location.origin + location.pathname + "?s=" + rep.sessionId;
+      $("shareInput").value = link;
+      shareBox.classList.remove("hidden");
+      history.replaceState(null, "", "?s=" + rep.sessionId);
+    } else {
+      shareBox.classList.add("hidden");
+    }
+
     show("report");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -476,6 +529,7 @@
       }
       // prefer server's clean feedback text; fall back to what we streamed
       result.feedbackText = result.content.feedback || feedbackBuf;
+      result.essay = essay;
       renderReport(result);
     } catch (err) {
       show("input");
@@ -486,9 +540,54 @@
 
   gradeBtn.addEventListener("click", grade);
   $("againBtn").addEventListener("click", () => {
+    history.replaceState(null, "", location.pathname); // clear ?s=
+    $("shareBox").classList.add("hidden");
     show("input");
     essayEl.focus();
   });
+
+  // essay card collapse toggle
+  $("essayHead").addEventListener("click", () => {
+    $("essayCard").classList.toggle("open");
+  });
+
+  // copy share link
+  $("shareCopy").addEventListener("click", async () => {
+    const input = $("shareInput");
+    try {
+      await navigator.clipboard.writeText(input.value);
+    } catch {
+      input.select();
+      document.execCommand("copy");
+    }
+    const btn = $("shareCopy");
+    const old = btn.textContent;
+    btn.textContent = "已复制 ✓";
+    setTimeout(() => { btn.textContent = old; }, 1500);
+  });
+
+  // ---- load shared report from ?s=<id> ----
+  async function loadSharedReport(sid) {
+    show("loading");
+    const streamBody = $("streamBody");
+    if (streamBody) streamBody.innerHTML = "";
+    try {
+      const resp = await fetch("/report?id=" + encodeURIComponent(sid));
+      const data = await resp.json();
+      if (!resp.ok || data.error) throw new Error(data.error || ("加载失败 (" + resp.status + ")"));
+      renderReport(data);
+    } catch (err) {
+      history.replaceState(null, "", location.pathname);
+      show("input");
+      inputError.textContent = "无法加载报告：" + err.message;
+      inputError.classList.remove("hidden");
+    }
+  }
+
+  const sharedId = new URLSearchParams(location.search).get("s");
+  if (sharedId && /^[a-z0-9]{8,32}$/i.test(sharedId)) {
+    loadSharedReport(sharedId);
+  }
 
   // ---- OCR upload ----
   uploadBtn.addEventListener("click", () => fileInput.click());

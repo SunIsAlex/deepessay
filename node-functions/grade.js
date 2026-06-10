@@ -57,6 +57,13 @@ function clampScore(v) {
   return Math.max(0, Math.min(5, s));
 }
 
+// 12-char base36 random id for shareable report URLs
+function genId() {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(bytes, (b) => alphabet[b % 36]).join("");
+}
+
 function normalizeScores(obj, feedbackText) {
   const safe = obj && typeof obj === "object" ? obj : {};
   const get = (k) => clampScore(safe?.[k]?.score);
@@ -172,6 +179,35 @@ export async function onRequest(context) {
       }
 
       const result = normalizeScores(parsed, feedbackText);
+
+      // ---- Persist to EdgeOne KV (best-effort; grading still works without it) ----
+      // KV namespace must be bound with the variable name `deepessay_kv` in the
+      // EdgeOne console. EdgeOne KV is accessed as a global, NOT via env.
+      let sessionId = null;
+      try {
+        if (typeof deepessay_kv !== "undefined" && deepessay_kv) {
+          sessionId = genId();
+          await deepessay_kv.put(
+            "report:" + sessionId,
+            JSON.stringify({
+              v: 1,
+              ts: Date.now(),
+              essay: essayText,
+              feedbackText,
+              scores: {
+                content: result.content.score,
+                language: result.language.score,
+                structure: result.structure.score,
+              },
+              topPriority: result.topPriority,
+            })
+          );
+        }
+      } catch (e) {
+        sessionId = null; // persistence failure must not break grading
+      }
+      if (sessionId) result.sessionId = sessionId;
+
       await send("result", result);
       await send("done", { ok: true });
     } catch (err) {
