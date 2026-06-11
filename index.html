@@ -179,7 +179,8 @@
     color: var(--text-secondary); font-size: 13px; }
   .spinner.small { width: 18px; height: 18px; border-width: 2px; margin: 0; }
   .stream-body { max-height: 420px; overflow-y: auto; font-size: 13.5px; }
-  .stream-body::after { content: "▋"; color: var(--blue); animation: blink 1s steps(2) infinite; }
+  .stream-body .md-block { margin: 0; }
+  .stream-body .md-live::after { content: "▋"; color: var(--blue); animation: blink 1s steps(2) infinite; margin-left: 1px; }
   @keyframes blink { 50% { opacity: 0; } }
 
   .report-actions { margin-top: 24px; text-align: center; }
@@ -453,6 +454,61 @@
   }
 
   // ---- grade action (SSE streaming) ----
+  // 轻量流式 Markdown 渲染器（借鉴 vue-renderer-markdown 思路）：
+  // 1) requestAnimationFrame 节流——突发 token 攒到下一帧统一渲染，消除高频抖动
+  // 2) 块级增量——按顶层空行切块，只重渲染“最后一个未完成块”，
+  //    已稳定的块 DOM 不再重建，避免正在看的内容被重排打抖
+  // 3) 粘底——仅当用户已在底部附近时才自动跟随滚动
+  function createStreamRenderer(container) {
+    let raw = "";
+    let scheduled = false;
+    let stableCount = 0; // 已“定稿”的块数（其 DOM 不再改动）
+
+    const splitBlocks = (text) =>
+      text.split(/\n{2,}/).filter((b, i, arr) => b.length > 0 || i === arr.length - 1);
+
+    function flush() {
+      scheduled = false;
+      const nearBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight < 48;
+
+      const blocks = splitBlocks(raw);
+      // 除最后一块外都视为已定稿——只在“块数增加”时把新定稿的块固化进 DOM
+      const newStable = Math.max(0, blocks.length - 1);
+
+      // 补齐缺失的已定稿块（增量 append，不动已有 DOM）
+      for (let i = stableCount; i < newStable; i++) {
+        const el = document.createElement("div");
+        el.className = "md-block";
+        el.innerHTML = renderMd(blocks[i]);
+        container.insertBefore(el, container.querySelector(".md-live"));
+      }
+      stableCount = Math.max(stableCount, newStable);
+
+      // 最后一块是“活动块”，每帧只重渲染它一个
+      let live = container.querySelector(".md-live");
+      if (!live) {
+        live = document.createElement("div");
+        live.className = "md-block md-live";
+        container.appendChild(live);
+      }
+      live.innerHTML = renderMd(blocks[blocks.length - 1] || "");
+
+      if (nearBottom) container.scrollTop = container.scrollHeight;
+    }
+
+    return {
+      push(text) {
+        raw += text;
+        if (!scheduled) { scheduled = true; requestAnimationFrame(flush); }
+      },
+      get text() { return raw; },
+      reset() {
+        raw = ""; scheduled = false; stableCount = 0; container.innerHTML = "";
+      },
+    };
+  }
+
   async function grade() {
     const essay = essayEl.value.trim();
     inputError.classList.add("hidden");
@@ -463,17 +519,13 @@
     }
 
     const streamBody = $("streamBody");
-    streamBody.innerHTML = "";
+    const streamer = createStreamRenderer(streamBody);
+    streamer.reset();
     show("loading");
 
-    let feedbackBuf = "";
     let result = null;
 
-    const applyToken = (text) => {
-      feedbackBuf += text;
-      streamBody.innerHTML = renderMd(feedbackBuf);
-      streamBody.scrollTop = streamBody.scrollHeight;
-    };
+    const applyToken = (text) => streamer.push(text);
 
     try {
       const resp = await fetch("/grade", {
@@ -525,7 +577,7 @@
         throw new Error("未收到评分结果，请重试。");
       }
       // prefer server's clean feedback text; fall back to what we streamed
-      result.feedbackText = result.content.feedback || feedbackBuf;
+      result.feedbackText = result.content.feedback || streamer.text;
       result.essay = essay;
       renderReport(result);
       // 报告已展示；再异步持久化到 KV（Edge Function），成功后补上分享链接。
