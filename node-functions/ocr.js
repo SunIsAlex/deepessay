@@ -68,7 +68,7 @@ export async function onRequest(context) {
       timeout: 120 * 1000,
       maxRetries: 1,
     });
-    const model = env.OCR_MODEL || "Qwen/Qwen3.5-397B-A17B";
+    const model = env.OCR_MODEL || "Qwen/Qwen3.6-35B-A3B";
 
     const completion = await openai.chat.completions.create({
       model,
