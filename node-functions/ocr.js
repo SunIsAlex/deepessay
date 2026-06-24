@@ -3,13 +3,16 @@ import getRequestBody from "./getRequestBody.js";
 
 // 只提取学生作文正文，忽略页眉标题、页码、水印、印刷题干等无关文字
 const OCR_PROMPT =
-  "You are an OCR engine. Extract the student's handwritten essay text from this image, " +
-  "exactly as written, preserving line breaks and paragraph structure. " +
-  "IGNORE any printed headers, section titles, page numbers, watermarks, logos, or website/account tags " +
-  "that are not part of the student's own writing. " +
-  "Do NOT correct spelling or grammar — transcribe verbatim, including the student's original errors. " +
-  "Output ONLY the recognized essay text, with no commentary, no explanations, no markdown fences.";
-
+"You are an OCR engine. Extract the student's handwritten essay text from this image, " +
+"exactly as written, preserving paragraph structure only. " +
+"IGNORE any printed headers, section titles, page numbers, watermarks, logos, or website/account tags " +
+"that are not part of the student's own writing. " +
+"Do NOT correct spelling or grammar — transcribe verbatim, including the student's original errors. " +
+"Normalize line breaks: do NOT preserve visual line wraps from the image. " +
+"Within the same paragraph, merge line-broken text into continuous sentences separated by spaces only. " +
+"Use a blank line only between separate paragraphs. " +
+"Do not insert line breaks inside a sentence or within a paragraph. " +
+"Output ONLY the recognized essay text, with no commentary, no explanations, no markdown fences.";
 // 允许的图片 MIME
 const ALLOWED_MIME = new Set([
   "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp",
