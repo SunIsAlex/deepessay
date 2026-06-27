@@ -46,9 +46,9 @@ deepessay/
 ├── test-api.sh             # 接口冒烟测试（curl）
 ├── node-functions/         # Cloud Functions —— 支持 SSE 流式
 │   ├── grade.js            # 批改接口（SSE 流式输出反馈 + 末尾评分 JSON）
-│   ├── ocr.js              # OCR 接口（图片转文字，非流式）
 │   └── getRequestBody.js   # 请求体解析 helper
-└── edge-functions/         # Edge Functions —— KV 仅在此可用（但不支持 SSE）
+└── edge-functions/         # Edge Functions —— 轻量请求与 KV
+    ├── ocr.js              # OCR 接口（原生 fetch 调用视觉模型）
     ├── save.js             # 批改后写报告到 KV，返回 sessionId
     └── report.js           # 按 id 从 KV 读报告（分享链接打开时）
 ```
@@ -127,8 +127,9 @@ node test-ocr.mjs ./作文照片.jpg
 ## 部署注意
 
 - **函数分两类，不能混放**：
-  - `node-functions/`（Cloud Functions）：`grade.js`、`ocr.js`。SSE 流式必须用 Cloud Functions——Edge Functions 上有缓冲问题（输出会一次性吐出而非流式）。
-  - `edge-functions/`（Edge Functions）：`save.js`、`report.js`。EdgeOne KV **只能在 Edge Functions 中访问**。
+  - `node-functions/`（Cloud Functions）：`grade.js`。SSE 流式必须用 Cloud Functions——Edge Functions 上有缓冲问题（输出会一次性吐出而非流式）。
+  - `edge-functions/`（Edge Functions）：`ocr.js`、`save.js`、`report.js`。OCR 使用 Web Runtime 原生 `fetch`，不依赖 Node.js SDK；EdgeOne KV **只能在 Edge Functions 中访问**。
+- **Edge Function 请求体上限为 1 MB**：前端会把 OCR 图片压缩到 650 KB 以下，再编码为 base64 发送。
 - **绑定 KV 命名空间**：在控制台「Storage - KV」开通账户、创建命名空间，绑定到本项目时**变量名必须填 `deepessay_kv`**（代码以该全局名访问 KV，非 `env.xxx`）。绑定后 `save` / `report` 才能工作；未绑定时批改仍正常，只是没有分享链接。
 - **KV key 限制**：key 只能含字母、数字、下划线（≤512B）。本项目用 `report_<id>`，id 为 12 位 base36（纯字母数字）。
 - OpenAI SDK 依赖已在 `package.json` 声明，EdgeOne 部署时自动安装；本地需先 `npm install`。
@@ -147,4 +148,3 @@ node test-ocr.mjs ./作文照片.jpg
 - [ ] 导出报告（打印友好 / 复制 markdown）
 - [ ] 题目类型选择（议论文 / 记叙文 / 应用文，影响评分侧重）
 - [ ] 字数 / 等级预设（高考 / 四六级 / 雅思，调整评分标准）
-- [ ] 图片上传前端压缩（当前限制 5MB，过大直接拦截）

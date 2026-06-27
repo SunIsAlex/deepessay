@@ -676,6 +676,46 @@
   // ---- OCR upload ----
   uploadBtn.addEventListener("click", () => fileInput.click());
 
+  const readAsDataUrl = (blob) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("读取图片失败"));
+    reader.readAsDataURL(blob);
+  });
+
+  // Edge Functions limit request bodies to 1 MB. Keep the binary image below
+  // 650 KB so base64 expansion plus the JSON envelope still fits comfortably.
+  async function prepareOcrImage(file) {
+    const targetBytes = 650 * 1024;
+    if (file.size <= targetBytes) return readAsDataUrl(file);
+
+    const bitmap = await createImageBitmap(file);
+    let scale = Math.min(1, 2200 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+      const quality = Math.max(0.55, 0.86 - attempt * 0.08);
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", quality)
+      );
+      if (!blob) throw new Error("图片压缩失败");
+      if (blob.size <= targetBytes) {
+        bitmap.close?.();
+        return readAsDataUrl(blob);
+      }
+
+      scale *= Math.min(0.85, Math.sqrt(targetBytes / blob.size) * 0.95);
+    }
+
+    bitmap.close?.();
+    throw new Error("图片压缩后仍然过大，请换一张分辨率较低的图片。");
+  }
+
   fileInput.addEventListener("change", async (e) => {
     const file = e.target.files && e.target.files[0];
     fileInput.value = ""; // 允许重复选同一张
@@ -690,15 +730,10 @@
       return;
     }
 
-    // 读成 base64 data URL
+    // 压缩后读成 base64 data URL，避免超过 Edge Function 请求体限制
     let dataUrl;
     try {
-      dataUrl = await new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(r.result);
-        r.onerror = () => reject(new Error("读取图片失败"));
-        r.readAsDataURL(file);
-      });
+      dataUrl = await prepareOcrImage(file);
     } catch (err) {
       inputError.textContent = err.message;
       inputError.classList.remove("hidden");

@@ -1,6 +1,3 @@
-import OpenAI from "openai";
-import getRequestBody from "./getRequestBody.js";
-
 // 只提取学生作文正文，忽略页眉标题、页码、水印、印刷题干等无关文字
 const OCR_PROMPT =
 "You are an OCR engine. Extract the student's handwritten essay text from this image, " +
@@ -29,7 +26,15 @@ export async function onRequest(context) {
   }
 
   try {
-    const body = await getRequestBody(request);
+    let body;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(JSON.stringify({ error: "请求体不是合法 JSON" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     // 前端传 { image: "data:image/jpeg;base64,...." } 或裸 base64 + mime
     let dataUrl = "";
     if (body && typeof body === "object") {
@@ -62,32 +67,59 @@ export async function onRequest(context) {
       });
     }
 
-    const openai = new OpenAI({
-      apiKey: env.OCR_API_KEY,
-      baseURL: env.OCR_API_URL,
-      timeout: 120 * 1000,
-      maxRetries: 1,
-    });
+    if (!env.OCR_API_KEY || !env.OCR_API_URL) {
+      return new Response(JSON.stringify({ error: "OCR 服务环境变量未配置" }), {
+        status: 503,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
     const model = env.OCR_MODEL || "Qwen/Qwen3.6-35B-A3B";
+    const endpoint =
+      env.OCR_API_URL.replace(/\/+$/, "") +
+      (env.OCR_API_URL.replace(/\/+$/, "").endsWith("/v1")
+        ? "/chat/completions"
+        : "/v1/chat/completions");
 
-    const completion = await openai.chat.completions.create({
-      model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
-            { type: "text", text: OCR_PROMPT },
-          ],
-        },
-      ],
-      temperature: 0,
-      max_tokens: 4096,
-      // 该视觉模型默认带推理模式，OCR 不需要，关掉以加速首字、省 token
-      enable_thinking: false,
+    // Edge Functions use a Web Service Worker runtime. Calling the
+    // OpenAI-compatible endpoint directly avoids depending on the Node SDK.
+    const upstream = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${env.OCR_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
+              { type: "text", text: OCR_PROMPT },
+            ],
+          },
+        ],
+        temperature: 0,
+        max_tokens: 4096,
+        // 该视觉模型默认带推理模式，OCR 不需要，关掉以加速首字、省 token
+        enable_thinking: false,
+      }),
     });
 
-    const text = (completion.choices?.[0]?.message?.content || "").trim();
+    const completion = await upstream.json().catch(() => null);
+    if (!upstream.ok) {
+      const message =
+        completion?.error?.message ||
+        completion?.message ||
+        `OCR 上游服务请求失败 (${upstream.status})`;
+      return new Response(JSON.stringify({ error: message }), {
+        status: 502,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    const text = (completion?.choices?.[0]?.message?.content || "").trim();
 
     if (!text) {
       return new Response(
