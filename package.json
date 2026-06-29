@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "description": "AI English essay grader with Lighthouse-style report UI on EdgeOne Pages",
+  "scripts": {
+    "test": "node test-sse-client.mjs"
+  },
   "dependencies": {
     "openai": "^4.77.0"
   }
