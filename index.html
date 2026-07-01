@@ -354,7 +354,8 @@
   // ---- audit card builder ----
   function makeAudit(name, data) {
     const score = data.score;
-    const color = colorFor(score);
+    const hasScore = score !== null && score !== "" && Number.isFinite(Number(score));
+    const color = hasScore ? colorFor(score) : getCSS("--blue");
     const card = document.createElement("div");
     card.className = "card audit open";
 
@@ -366,7 +367,7 @@
       '<div class="audit-head">' +
         '<span class="dot" style="background:' + color + '"></span>' +
         '<span class="audit-name">' + name + '</span>' +
-        '<span class="audit-score">' + score + '/5</span>' +
+        (hasScore ? '<span class="audit-score">' + score + '/5</span>' : "") +
         '<span class="chev">▾</span>' +
       '</div>' +
       '<div class="audit-body">' + body + '</div>';
@@ -404,6 +405,9 @@
 
   // ---- render full report ----
   function renderReport(rep) {
+    const hasScores = !rep.unscored &&
+      [rep.content?.score, rep.language?.score, rep.structure?.score]
+        .every((score) => Number.isFinite(Number(score)));
     const sections = splitFeedback(rep.feedbackText || "");
     const dims = [
       ["Content", rep.content.score, sections.Content],
@@ -416,10 +420,13 @@
     // gauges
     const gWrap = $("gauges");
     gWrap.innerHTML = "";
-    gWrap.appendChild(makeGauge("Content", scores[0], false));
-    gWrap.appendChild(makeGauge("Language", scores[1], false));
-    gWrap.appendChild(makeGauge("Structure", scores[2], false));
-    gWrap.appendChild(makeGauge("总分", total, true));
+    gWrap.parentElement.classList.toggle("hidden", !hasScores);
+    if (hasScores) {
+      gWrap.appendChild(makeGauge("Content", scores[0], false));
+      gWrap.appendChild(makeGauge("Language", scores[1], false));
+      gWrap.appendChild(makeGauge("Structure", scores[2], false));
+      gWrap.appendChild(makeGauge("总分", total, true));
+    }
 
     // priority
     $("priorityBody").textContent = rep.topPriority || "";
@@ -428,9 +435,17 @@
     // audits
     const aWrap = $("audits");
     aWrap.innerHTML = "";
-    dims.forEach(([name, score, fb]) =>
-      aWrap.appendChild(makeAudit(name, { score, feedback: fb, justification: "" }))
-    );
+    if (hasScores) {
+      dims.forEach(([name, score, fb]) =>
+        aWrap.appendChild(makeAudit(name, { score, feedback: fb, justification: "" }))
+      );
+    } else {
+      aWrap.appendChild(makeAudit("文字反馈", {
+        score: null,
+        feedback: rep.feedbackText,
+        justification: "",
+      }));
+    }
 
     // essay original text (shown when available, e.g. shared reports)
     const essayCard = $("essayCard");
@@ -525,6 +540,7 @@
     show("loading");
 
     let result = null;
+    let formatError = "";
 
     const applyToken = (text) => streamer.push(text);
 
@@ -538,20 +554,33 @@
         } else if (event === "result") {
           result = data;
         } else if (event === "error") {
-          throw new Error(data.message || "批改出错");
+          const message = data.message || "批改出错";
+          if (/评分数据缺失|输出可能被截断/.test(message)) {
+            formatError = message;
+          } else {
+            throw new Error(message);
+          }
         }
       });
 
-      if (!result || !result.content || !result.language || !result.structure) {
+      if (!result && formatError && streamer.text.trim()) {
+        result = {
+          content: { score: null },
+          language: { score: null },
+          structure: { score: null },
+          feedbackText: streamer.text.trim(),
+          unscored: true,
+        };
+      } else if (!result || !result.content || !result.language || !result.structure) {
         throw new Error("未收到评分结果，请重试。");
       }
       // prefer server's clean feedback text; fall back to what we streamed
-      result.feedbackText = result.content.feedback || streamer.text;
+      result.feedbackText = result.feedbackText || result.content.feedback || streamer.text;
       result.essay = essay;
       renderReport(result);
       // 报告已展示；再异步持久化到 KV（Edge Function），成功后补上分享链接。
       // 失败不影响已展示的报告，只是没有可分享的 URL。
-      saveReport(result);
+      if (!result.unscored) saveReport(result);
     } catch (err) {
       show("input");
       inputError.textContent = "批改失败：" + err.message;
