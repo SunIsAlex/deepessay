@@ -1,5 +1,5 @@
-// 只提取学生作文正文，忽略页眉标题、页码、水印、印刷题干等无关文字
-const OCR_PROMPT =
+// 作文模式只提取学生正文；题目模式则完整保留题干、材料和写作要求。
+const ESSAY_OCR_PROMPT =
 "You are an OCR engine. Extract the student's handwritten essay text from this image, " +
 "exactly as written, preserving paragraph structure only. " +
 "IGNORE any printed headers, section titles, page numbers, watermarks, logos, or website/account tags " +
@@ -10,6 +10,15 @@ const OCR_PROMPT =
 "Use a blank line only between separate paragraphs. " +
 "Do not insert line breaks inside a sentence or within a paragraph. " +
 "Output ONLY the recognized essay text, with no commentary, no explanations, no markdown fences.";
+
+const PROMPT_OCR_PROMPT =
+"You are an OCR engine. Extract the complete essay prompt from this image exactly as written. " +
+"Include the title, background material, charts or captions expressed as concise text, questions, " +
+"writing instructions, word-count requirements, and every listed constraint that affects the response. " +
+"Preserve meaningful paragraph breaks and list structure, but ignore page numbers, watermarks, logos, " +
+"website/account tags, answer areas, and unrelated surrounding content. " +
+"Do NOT answer, analyze, translate, summarize, or correct the prompt. " +
+"Output ONLY the recognized prompt text, with no commentary, no explanations, no markdown fences.";
 // 允许的图片 MIME
 const ALLOWED_MIME = new Set([
   "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp",
@@ -51,6 +60,9 @@ export async function onRequest(context) {
         headers: { "Content-Type": "application/json" },
       });
     }
+
+    const purpose = body.purpose === "prompt" ? "prompt" : "essay";
+    const ocrPrompt = purpose === "prompt" ? PROMPT_OCR_PROMPT : ESSAY_OCR_PROMPT;
 
     // 校验 data URL 格式与类型
     const m = dataUrl.match(/^data:([^;]+);base64,/);
@@ -96,7 +108,7 @@ export async function onRequest(context) {
             role: "user",
             content: [
               { type: "image_url", image_url: { url: dataUrl, detail: "high" } },
-              { type: "text", text: OCR_PROMPT },
+              { type: "text", text: ocrPrompt },
             ],
           },
         ],
@@ -123,7 +135,11 @@ export async function onRequest(context) {
 
     if (!text) {
       return new Response(
-        JSON.stringify({ error: "未识别到文字，请确认图片清晰、含作文内容后重试。" }),
+        JSON.stringify({
+          error: purpose === "prompt"
+            ? "未识别到题目文字，请确认图片清晰、包含完整题干后重试。"
+            : "未识别到作文文字，请确认图片清晰、含作文内容后重试。",
+        }),
         { status: 502, headers: { "Content-Type": "application/json" } }
       );
     }

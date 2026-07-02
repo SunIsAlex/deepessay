@@ -1,10 +1,11 @@
 # DeepEssay · 作文批改
 
-一个基于 AI 的英语作文批改工具，部署在 [EdgeOne Pages](https://edgeone.ai/products/pages)。支持**手写作文拍照识别**和**文本直接粘贴**两种输入方式，批改结果以 **Google Lighthouse 报告风格**呈现：环形评分 + 分维度可展开详情 + Top Priority 横幅。
+一个基于 AI 的英语作文学习工具，部署在 [EdgeOne Pages](https://edgeone.ai/products/pages)。支持作文批改与写作前审题构思，图片和文本均可作为输入。
 
 ## 功能
 
 - 📷 **拍照识别**：上传手写作文照片，OCR 自动转文字，填入编辑框供核对修正
+- 🧠 **审题构思**：上传或粘贴作文题目，拆解要求并生成 Brainstorm 式立意、素材与段落大纲
 - ✍️ **文本输入**：直接粘贴作文，带字数统计
 - 📊 **Lighthouse 风格报告**：
   - 顶部三个环形评分（Content / Language / Structure）+ 总分大环
@@ -17,13 +18,13 @@
 
 ```
                           ┌─────────────────────────────┐
-  [拍照] ──base64──▶ /ocr │ SiliconFlow 视觉模型         │──识别文字──┐
-   (Cloud Fn)             │ Qwen3.5-397B-A17B            │            │
+  [作文/题目照片] ──▶ /ocr │ SiliconFlow 视觉模型         │──识别文字──┐
+   (Edge Fn)              │ Qwen3.6-35B-A3B              │            │
                           └─────────────────────────────┘            ▼
                                                             填入 textarea，用户核对修正
                                                                        │
                           ┌─────────────────────────────┐            ▼
-  [粘贴] ───────▶ /grade  │ DeepSeek                     │◀──批改──────┘
+  [作文文本] ─────▶ /grade │ DeepSeek                     │◀──批改──────┘
    (Cloud Fn, SSE)        │ deepseek-v4-flash (SSE 流式) │
                           └─────────────────────────────┘
                                        │
@@ -32,9 +33,11 @@
                                        ▲                                  │
                                        │                                  │
                             分享链接 ?s=<id> ◀── /report (Edge Fn) ◀──────┘
+
+  [题目文本] ──▶ /brainstorm (Cloud Fn, SSE) ──▶ 审题拆解 + 立意/素材库 + 推荐大纲
 ```
 
-两个 AI 服务来自不同供应商，配置完全隔离：OCR 走硅基流动，批改走 DeepSeek 官方。报告持久化走 EdgeOne KV（仅 Edge Functions 可访问）。
+两个 AI 服务来自不同供应商，配置完全隔离：OCR 走硅基流动，批改与审题走 DeepSeek 官方。报告持久化走 EdgeOne KV（仅 Edge Functions 可访问）。
 
 ## 目录结构
 
@@ -46,6 +49,7 @@ deepessay/
 ├── test-api.sh             # 接口冒烟测试（curl）
 ├── node-functions/         # Cloud Functions —— 支持 SSE 流式
 │   ├── grade.js            # 批改接口（SSE 流式输出反馈 + 末尾评分 JSON）
+│   ├── brainstorm.js       # 审题接口（SSE 流式输出 Brainstorm 大纲）
 │   └── getRequestBody.js   # 请求体解析 helper
 └── edge-functions/         # Edge Functions —— 轻量请求与 KV
     ├── ocr.js              # OCR 接口（原生 fetch 调用视觉模型）
@@ -73,7 +77,7 @@ deepessay/
 |------|------|------|
 | `OCR_API_URL` | 硅基流动 API 端点 | `https://api.siliconflow.cn/v1` |
 | `OCR_API_KEY` | 硅基流动 API Key | `sk-...` |
-| `OCR_MODEL` | OCR 视觉模型 | `Qwen/Qwen3.5-397B-A17B` |
+| `OCR_MODEL` | OCR 视觉模型 | `Qwen/Qwen3.6-35B-A3B` |
 
 > ⚠️ 历史提示：批改服务的环境变量曾命名为 `OPENAI_*`，现已统一改为 `GRADE_*`。从旧版本升级时务必在控制台同步改名，否则批改会失效。
 
@@ -98,13 +102,14 @@ export SILICONFLOW_API_KEY="sk-..."
 node test-ocr.mjs ./作文照片.jpg
 ```
 
-可选环境变量：`OCR_MODEL`（默认 `Qwen/Qwen3.5-397B-A17B`）、`SILICONFLOW_API_URL`（默认 `https://api.siliconflow.cn/v1`）。脚本以流式输出识别结果，并打印首字耗时、总耗时、字数统计。
+可选环境变量：`OCR_MODEL`（部署默认 `Qwen/Qwen3.6-35B-A3B`）、`SILICONFLOW_API_URL`（默认 `https://api.siliconflow.cn/v1`）。脚本以流式输出识别结果，并打印首字耗时、总耗时、字数统计。
 
 ## 实现要点
 
 ### OCR（ocr.js）
 
-- 接收前端传来的 base64 图片（`{ image: "data:image/...;base64,..." }`），调用硅基流动视觉模型识别
+- 接收前端传来的 base64 图片和用途（`{ image, purpose: "essay" | "prompt" }`），调用硅基流动视觉模型识别
+- `essay` 模式只提取学生正文；`prompt` 模式完整提取题干、材料、图表说明和写作约束，二者复用同一路由与模型配置
 - 关闭模型的 thinking 推理模式（`enable_thinking: false`）——该模型默认带推理，会显著拖慢首字、浪费 token；关闭后实测首字 ~2s、总耗时 ~5s
 - Prompt 约束：只提取学生作文正文，忽略印刷标题 / 页码 / 水印；逐字转写，**不纠正**原文错误（保留学生的错误供批改环节评判）
 - 识别结果填进 textarea 而非直接批改——手写 OCR 必然有错字，需用户核对修正，否则模型会把 OCR 错误当成学生的语法错误来扣分
@@ -117,9 +122,15 @@ node test-ocr.mjs ./作文照片.jpg
 - 拿不到分数时发 `error` 而非伪造的 0 分报告，前端据此提示重试
 - 评分采用 1–5 分制，映射三色：4–5 绿、3 橙、1–2 红（沿用 Lighthouse 心智模型）
 
+### 审题（brainstorm.js）
+
+- 复用 `GRADE_*` DeepSeek 配置和现有 SSE 客户端，实时输出 Markdown 大纲
+- 固定按题意拆解、立意与观点库、素材与论证、推荐大纲、表达工具箱组织
+- 只生成写作计划，不代写完整作文；信息不足时明确标注假设
+
 ### 前端（index.html）
 
-- 三态切换：输入态 / 流式加载态（打字机正文）/ 报告态
+- 支持作文批改与审题构思模式切换；共用输入、图片压缩、OCR 和流式渲染逻辑
 - 环形评分用 SVG `<circle>` + `stroke-dasharray` 实现进度弧，弧线从 0 扫到目标值，颜色按分数区间动态取色
 - Markdown 反馈经 `marked` 解析 + `DOMPurify` 消毒后渲染，防 XSS
 - 维度卡片默认全部展开（报告型应用，用户想一次看全）
@@ -127,7 +138,7 @@ node test-ocr.mjs ./作文照片.jpg
 ## 部署注意
 
 - **函数分两类，不能混放**：
-  - `node-functions/`（Cloud Functions）：`grade.js`。SSE 流式必须用 Cloud Functions——Edge Functions 上有缓冲问题（输出会一次性吐出而非流式）。
+  - `node-functions/`（Cloud Functions）：`grade.js`、`brainstorm.js`。SSE 流式必须用 Cloud Functions——Edge Functions 上有缓冲问题（输出会一次性吐出而非流式）。
   - `edge-functions/`（Edge Functions）：`ocr.js`、`save.js`、`report.js`。OCR 使用 Web Runtime 原生 `fetch`，不依赖 Node.js SDK；EdgeOne KV **只能在 Edge Functions 中访问**。
 - **Edge Function 请求体上限为 1 MB**：前端会把 OCR 图片压缩到 650 KB 以下，再编码为 base64 发送。
 - **绑定 KV 命名空间**：在控制台「Storage - KV」开通账户、创建命名空间，绑定到本项目时**变量名必须填 `deepessay_kv`**（代码以该全局名访问 KV，非 `env.xxx`）。绑定后 `save` / `report` 才能工作；未绑定时批改仍正常，只是没有分享链接。
